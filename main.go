@@ -43,9 +43,17 @@ func getDirContents(ctx context.Context, req getDirContentsRequest) (*getDirCont
 	}, nil
 }
 
+func GetTokenMiddleware(ctx context.Context, headers http.Header) error {
+	token := headers.Get("token")
+	if token != "secret-token" {
+		return fmt.Errorf("invalid secret token")
+	}
+	return nil
+}
+
 func main() {
 	a := app.New("localhost:8000", "./output.ts")
-	app.NewQuery(getDirContents).Attach(a)
+	app.NewQuery(getDirContents).Attach(a, []app.HeaderMiddlewareFn{GetTokenMiddleware})
 
 	a.AddAdditionalHandlers("/fe-dist/", http.StripPrefix("/fe-dist/", http.FileServer(http.Dir("./fe-dist/"))))
 

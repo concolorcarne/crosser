@@ -52,7 +52,7 @@ type Header struct {
 
 type Query[query any, output any] func(ctx context.Context, query query) (*output, error)
 
-type HeaderMiddlewareFn func(ctx context.Context, headers map[string][]string) error
+type HeaderMiddlewareFn func(ctx context.Context, headers http.Header) error
 
 type QueryRep struct {
 	InputType        reflect.Type
@@ -63,11 +63,23 @@ type QueryRep struct {
 	HeaderMiddleware []HeaderMiddlewareFn
 }
 
-func buildHandler(query *QueryRep) func(http.ResponseWriter, *http.Request) {
+func buildHandler(query *QueryRep, middleware []HeaderMiddlewareFn) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, req *http.Request) {
+		for _, mw := range middleware {
+			err := mw(req.Context(), req.Header)
+			if err != nil {
+				errorReturn := buildError(500, fmt.Sprintf("unable to execute middleware: %v", err))
+				jsonError, err := json.Marshal(errorReturn)
+				if err != nil {
+					http.Error(w, fmt.Sprintf("Unable to create json body: %v", err), 500)
+					return
+				}
+				w.Write(jsonError)
+				return
+			}
+		}
 
 		fmt.Println("Got into handler, attempting to read from body")
-
 		// Get request in the form of whatever, attempt to parse into expected structure
 		body, err := io.ReadAll(req.Body)
 		if err != nil {
@@ -106,7 +118,7 @@ func (c *Crosser) assembleHandlers() {
 	for _, query := range c.handlers {
 		// I know the input and output types. I need to map those to work
 		// with func(http.ResponseWriter, *http.Request)
-		f := buildHandler(query)
+		f := buildHandler(query, query.HeaderMiddleware)
 		fmt.Println("Attaching route at", query.QueryPath)
 		c.router.HandleFunc(
 			query.QueryPath,
@@ -156,10 +168,11 @@ func (c *Crosser) GenCode() (string, error) {
 			Name:    qr.FnName,
 			Parameters: []typescriptify.FunctionParameter{
 				{Name: "params", Type: qr.InputType.Name()},
+				{Name: "headers?", Type: "HeadersInit | undefined"},
 			},
 			ReturnType: fmt.Sprintf("Promise<Response<%s>>", qr.OutputType.Name()),
 			Body: fmt.Sprintf(
-				`return genFunc<%s, %s>(params, "%s");`,
+				`return genFunc<%s, %s>(params, "%s", headers);`,
 				qr.InputType.Name(),
 				qr.OutputType.Name(),
 				qr.QueryPath,
@@ -173,13 +186,16 @@ func (c *Crosser) GenCode() (string, error) {
 		DontExport: true,
 		Name:       "genFunc<T, K>",
 		Parameters: []typescriptify.FunctionParameter{
-			{Name: "params", Type: "T"}, {Name: "path", Type: "string"},
+			{Name: "params", Type: "T"},
+			{Name: "path", Type: "string"},
+			{Name: "headers?", Type: "HeadersInit | undefined"},
 		},
 		ReturnType: "Promise<Response<K>>",
 		Body: fmt.Sprintf(`
 const requestOptions: RequestInit = { method: "POST" };
 
 requestOptions.body = JSON.stringify(params as T);
+requestOptions.headers = headers;
 const host = "%s";
 
 const url = host + path;

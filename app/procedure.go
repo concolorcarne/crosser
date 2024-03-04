@@ -9,7 +9,6 @@ import (
 )
 
 type Method string
-type validatorFn func(interface{}) error
 
 const (
 	TextXML               = "text/xml"
@@ -93,28 +92,32 @@ func checkIfQueryStruct[query any](arg query) {
 	}
 }
 
-func (p *Procedure[input, output]) Attach(app *Crosser) {
+func (p *Procedure[input, output]) Attach(app *Crosser, headerMiddleware []HeaderMiddlewareFn) {
 	// I can check that the input and output match the required pattern
 	inputString := strings.Split(reflect.TypeFor[input]().String(), ".")[1]
 	outputString := strings.Split(reflect.TypeFor[output]().String(), ".")[1]
 
 	if inputString == outputString {
-		panic("They both need distinct types")
+		panic("The input and output parameters must have distinct structs")
 	}
 
 	inputName := strings.Replace(inputString, "Request", "", 1)
 	outputName := strings.Replace(outputString, "Response", "", 1)
 	if inputName != outputName {
-		panic("They should follow the pattern")
+		panic("Input and output structs should match the pattern {methodName}Request/{methodName}Response")
 	}
 
 	queryPath := fmt.Sprintf("/crosser/%s", inputName)
+	if headerMiddleware == nil {
+		headerMiddleware = []HeaderMiddlewareFn{}
+	}
 
 	app.AddHandler(&QueryRep{
-		InputType:  reflect.TypeFor[input](),
-		OutputType: reflect.TypeFor[output](),
-		FnName:     inputName,
-		HandleFn:   p.jankedHandler,
-		QueryPath:  queryPath,
+		InputType:        reflect.TypeFor[input](),
+		OutputType:       reflect.TypeFor[output](),
+		FnName:           inputName,
+		HandleFn:         p.jankedHandler,
+		QueryPath:        queryPath,
+		HeaderMiddleware: headerMiddleware,
 	})
 }
