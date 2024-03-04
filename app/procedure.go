@@ -34,6 +34,15 @@ type Procedure[input any, output any] struct {
 	jankedHandler func(context.Context, []byte) ([]byte, error)
 }
 
+func buildError(status int, message string) *Res[ReturnError] {
+	return &Res[ReturnError]{
+		Status: status,
+		Body: ReturnError{
+			Message: message,
+		},
+	}
+}
+
 func queryToJankedHandlerAdapter[queryType any, output any](queryFunc func(context.Context, queryType) (output, error)) func(context.Context, []byte) ([]byte, error) {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var body queryType
@@ -43,12 +52,7 @@ func queryToJankedHandlerAdapter[queryType any, output any](queryFunc func(conte
 
 		res, err := queryFunc(ctx, body)
 		if err != nil {
-			errorReturn := Res[ReturnError]{
-				Status: 500,
-				Body: ReturnError{
-					Message: fmt.Sprintf("%v", err),
-				},
-			}
+			errorReturn := buildError(500, err.Error())
 			return json.Marshal(errorReturn)
 		}
 

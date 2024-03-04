@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -51,28 +52,44 @@ type Header struct {
 
 type Query[query any, output any] func(ctx context.Context, query query) (*output, error)
 
+type HeaderMiddlewareFn func(ctx context.Context, headers map[string][]string) error
+
 type QueryRep struct {
-	InputType  reflect.Type
-	OutputType reflect.Type
-	FnName     string
-	HandleFn   func(context.Context, []byte) ([]byte, error)
-	QueryPath  string
+	InputType        reflect.Type
+	OutputType       reflect.Type
+	FnName           string
+	HandleFn         func(context.Context, []byte) ([]byte, error)
+	QueryPath        string
+	HeaderMiddleware []HeaderMiddlewareFn
 }
 
 func buildHandler(query *QueryRep) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, req *http.Request) {
+
 		fmt.Println("Got into handler, attempting to read from body")
 
 		// Get request in the form of whatever, attempt to parse into expected structure
 		body, err := io.ReadAll(req.Body)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Unable to read body: %v", err), 500)
+			errorReturn := buildError(500, fmt.Sprintf("unable to read from body: %v", err))
+			jsonError, err := json.Marshal(errorReturn)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Unable to create json body: %v", err), 500)
+				return
+			}
+			w.Write(jsonError)
 			return
 		}
 
 		res, err := query.HandleFn(req.Context(), body)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Unable to execute handler: %v", err), 500)
+			errorReturn := buildError(500, fmt.Sprintf("unable to execute handler: %v", err))
+			jsonError, err := json.Marshal(errorReturn)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Unable to create json body: %v", err), 500)
+				return
+			}
+			w.Write(jsonError)
 			return
 		}
 
