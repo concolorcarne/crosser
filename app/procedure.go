@@ -8,41 +8,23 @@ import (
 	"strings"
 )
 
-type Method string
-
-const (
-	TextXML               = "text/xml"
-	TextHTML              = "text/html"
-	TextPlain             = "text/plain"
-	ApplicationXML        = "application/xml"
-	ApplicationJSON       = "application/json"
-	ApplicationJavaScript = "application/javascript"
-	ApplicationForm       = "application/x-www-form-urlencoded"
-	OctetStream           = "application/octet-stream"
-	MultipartForm         = "multipart/form-data"
-
-	TextXMLCharsetUTF8               = "text/xml; charset=utf-8"
-	TextHTMLCharsetUTF8              = "text/html; charset=utf-8"
-	TextPlainCharsetUTF8             = "text/plain; charset=utf-8"
-	ApplicationXMLCharsetUTF8        = "application/xml; charset=utf-8"
-	ApplicationJSONCharsetUTF8       = "application/json; charset=utf-8"
-	ApplicationJavaScriptCharsetUTF8 = "application/javascript; charset=utf-8"
-)
-
 type Procedure[input any, output any] struct {
-	jankedHandler func(context.Context, []byte) ([]byte, error)
+	// A handler that matches the shape of the generic function
+	// but deals in bytes that are unmarshalled/ marshalled from/ to json
+	byteHandler func(context.Context, []byte) ([]byte, error)
 }
 
-func buildError(status int, message string) *Res[ReturnError] {
-	return &Res[ReturnError]{
+func buildError(status int, message string) ([]byte, error) {
+	res := Res[returnError]{
 		Status: status,
-		Body: ReturnError{
+		Body: returnError{
 			Message: message,
 		},
 	}
+	return json.Marshal(res)
 }
 
-func queryToJankedHandlerAdapter[queryType any, output any](queryFunc func(context.Context, queryType) (output, error)) func(context.Context, []byte) ([]byte, error) {
+func queryToByteHandlerAdapter[queryType any, output any](queryFunc func(context.Context, queryType) (output, error)) func(context.Context, []byte) ([]byte, error) {
 	return func(ctx context.Context, input []byte) ([]byte, error) {
 		var body queryType
 		if json.Unmarshal(input, &body) != nil {
@@ -51,8 +33,7 @@ func queryToJankedHandlerAdapter[queryType any, output any](queryFunc func(conte
 
 		res, err := queryFunc(ctx, body)
 		if err != nil {
-			errorReturn := buildError(500, err.Error())
-			return json.Marshal(errorReturn)
+			return buildError(500, err.Error())
 		}
 
 		responseObject := Res[output]{
@@ -66,13 +47,16 @@ func queryToJankedHandlerAdapter[queryType any, output any](queryFunc func(conte
 // Creates a new query procedure that can be attached to groups / app root.
 // The generic arguments specify the structure for validating query parameters (the query Params and the resulting handler output).
 // Use any to avoid validation
-func NewQuery[input any, output any](queryFn Query[input, output]) *Procedure[input, output] {
+func NewRoute[input any, output any](queryFn RouteHandler[input, output]) *Procedure[input, output] {
 
-	var queryInstance input
-	checkIfQueryStruct(queryInstance)
+	var inputType input
+	checkIfQueryStruct(inputType)
+
+	var outputType input
+	checkIfQueryStruct(outputType)
 
 	return &Procedure[input, output]{
-		jankedHandler: queryToJankedHandlerAdapter(queryFn),
+		byteHandler: queryToByteHandlerAdapter(queryFn),
 	}
 }
 
@@ -92,32 +76,39 @@ func checkIfQueryStruct[query any](arg query) {
 	}
 }
 
-func (p *Procedure[input, output]) Attach(app *Crosser, headerMiddleware []HeaderMiddlewareFn) {
+func (p *Procedure[input, output]) createRouteRep(headerMiddleware []HeaderMiddlewareFn) (*RouteContainer, error) {
 	// I can check that the input and output match the required pattern
 	inputString := strings.Split(reflect.TypeFor[input]().String(), ".")[1]
 	outputString := strings.Split(reflect.TypeFor[output]().String(), ".")[1]
 
 	if inputString == outputString {
-		panic("The input and output parameters must have distinct structs")
+		return nil, fmt.Errorf("the input and output parameters must have distinct structs")
 	}
 
 	inputName := strings.Replace(inputString, "Request", "", 1)
 	outputName := strings.Replace(outputString, "Response", "", 1)
 	if inputName != outputName {
-		panic("Input and output structs should match the pattern {methodName}Request/{methodName}Response")
+		return nil, fmt.Errorf("input and output structs should match the pattern {methodName}Request/{methodName}Response")
 	}
 
 	queryPath := fmt.Sprintf("/crosser/%s", inputName)
 	if headerMiddleware == nil {
 		headerMiddleware = []HeaderMiddlewareFn{}
 	}
-
-	app.AddHandler(&QueryRep{
+	return &RouteContainer{
 		InputType:        reflect.TypeFor[input](),
 		OutputType:       reflect.TypeFor[output](),
 		FnName:           inputName,
-		HandleFn:         p.jankedHandler,
+		HandleFn:         p.byteHandler,
 		QueryPath:        queryPath,
 		HeaderMiddleware: headerMiddleware,
-	})
+	}, nil
+}
+
+func (p *Procedure[input, output]) Attach(app *Crosser, headerMiddleware []HeaderMiddlewareFn) {
+	rr, err := p.createRouteRep(headerMiddleware)
+	if err != nil {
+		panic(err)
+	}
+	app.AddHandler(rr)
 }

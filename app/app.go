@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -17,7 +16,7 @@ import (
 
 type Crosser struct {
 	// Relax the type constraints here, as they'll be enforced when creating the handlers?
-	handlers         []*QueryRep
+	handlers         []*RouteContainer
 	host             string
 	router           *mux.Router
 	tsOutputLocation string
@@ -31,30 +30,20 @@ func New(host string, tsOutputLocation string) *Crosser {
 	}
 }
 
-type ReturnError struct {
+type returnError struct {
 	Message string
 }
 
 type Res[T any] struct {
-	Headers Header
-	Body    T
-	Status  int
-}
-type Header struct {
-	Status          int
-	Authorization   string         // Credentials for authenticating the client to the server
-	CacheControl    string         // Directives for caching mechanisms in both requests and responses
-	ContentEncoding string         // The encoding of the body
-	ContentType     string         // The MIME type of the body of the request (used with POST and PUT requests)
-	Expires         string         // Gives the date/time after which the response is considered stale
-	Cookies         []*http.Cookie //Cookies
+	Body   T
+	Status int
 }
 
-type Query[query any, output any] func(ctx context.Context, query query) (*output, error)
+type RouteHandler[input any, output any] func(ctx context.Context, query input) (*output, error)
 
 type HeaderMiddlewareFn func(ctx context.Context, headers http.Header) error
 
-type QueryRep struct {
+type RouteContainer struct {
 	InputType        reflect.Type
 	OutputType       reflect.Type
 	FnName           string
@@ -63,13 +52,13 @@ type QueryRep struct {
 	HeaderMiddleware []HeaderMiddlewareFn
 }
 
-func buildHandler(query *QueryRep, middleware []HeaderMiddlewareFn) func(http.ResponseWriter, *http.Request) {
+func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, req *http.Request) {
+		// Run through the middleware function and break out if any of them fail
 		for _, mw := range middleware {
 			err := mw(req.Context(), req.Header)
 			if err != nil {
-				errorReturn := buildError(500, fmt.Sprintf("unable to execute middleware: %v", err))
-				jsonError, err := json.Marshal(errorReturn)
+				jsonError, err := buildError(500, fmt.Sprintf("unable to execute middleware: %v", err))
 				if err != nil {
 					http.Error(w, fmt.Sprintf("Unable to create json body: %v", err), 500)
 					return
@@ -79,12 +68,10 @@ func buildHandler(query *QueryRep, middleware []HeaderMiddlewareFn) func(http.Re
 			}
 		}
 
-		fmt.Println("Got into handler, attempting to read from body")
 		// Get request in the form of whatever, attempt to parse into expected structure
 		body, err := io.ReadAll(req.Body)
 		if err != nil {
-			errorReturn := buildError(500, fmt.Sprintf("unable to read from body: %v", err))
-			jsonError, err := json.Marshal(errorReturn)
+			jsonError, err := buildError(500, fmt.Sprintf("unable to read from body: %v", err))
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Unable to create json body: %v", err), 500)
 				return
@@ -95,8 +82,7 @@ func buildHandler(query *QueryRep, middleware []HeaderMiddlewareFn) func(http.Re
 
 		res, err := query.HandleFn(req.Context(), body)
 		if err != nil {
-			errorReturn := buildError(500, fmt.Sprintf("unable to execute handler: %v", err))
-			jsonError, err := json.Marshal(errorReturn)
+			jsonError, err := buildError(500, fmt.Sprintf("unable to execute handler: %v", err))
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Unable to create json body: %v", err), 500)
 				return
@@ -128,9 +114,18 @@ func (c *Crosser) assembleHandlers() {
 }
 
 func (c *Crosser) writeCode() {
-	code, err := c.GenCode()
+	if c.tsOutputLocation == "" {
+		// Skip writing code out
+		return
+	}
+
+	code, err := c.genCode()
+	if err != nil {
+		panic(err)
+	}
+
 	os.Remove(c.tsOutputLocation)
-	os.WriteFile(c.tsOutputLocation, []byte(code), 0777)
+	err = os.WriteFile(c.tsOutputLocation, []byte(code), 0777)
 	if err != nil {
 		panic(err)
 	}
@@ -139,13 +134,12 @@ func (c *Crosser) writeCode() {
 func (c *Crosser) Start() {
 	c.assembleHandlers()
 	c.writeCode()
-	http.Handle("/", c.router)
 
+	// todo: Handle SSL
 	addr := c.host
 	srv := &http.Server{
-		Handler: c.router,
-		Addr:    addr,
-		// Good practice: enforce timeouts for servers you create!
+		Handler:      c.router,
+		Addr:         addr,
 		WriteTimeout: 15 * time.Second,
 		ReadTimeout:  15 * time.Second,
 	}
@@ -154,7 +148,7 @@ func (c *Crosser) Start() {
 	log.Fatal(srv.ListenAndServe())
 }
 
-func (c *Crosser) GenCode() (string, error) {
+func (c *Crosser) genCode() (string, error) {
 	converter := typescriptify.New()
 	converter.DontExport = false
 	converter.BackupDir = ""
@@ -217,6 +211,6 @@ return body;`, fmt.Sprintf("http://%s", c.host)),
 
 // I can use handlers to build up a collection of types to generate
 // Can I then also build the actual HTTP handlers
-func (c *Crosser) AddHandler(q *QueryRep) {
+func (c *Crosser) AddHandler(q *RouteContainer) {
 	c.handlers = append(c.handlers, q)
 }
