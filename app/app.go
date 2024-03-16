@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/gorilla/mux"
 	"github.com/tkrajina/typescriptify-golang-structs/typescriptify"
 )
@@ -30,7 +32,7 @@ func New(host string, tsOutputLocation string) *Crosser {
 	}
 }
 
-type returnError struct {
+type ReturnError struct {
 	Message string
 }
 
@@ -52,6 +54,65 @@ type RouteContainer struct {
 	HeaderMiddleware []HeaderMiddlewareFn
 }
 
+var validate *validator.Validate
+
+type Route[input any, output any] struct {
+	// A handler that matches the shape of the generic function
+	// but deals in bytes that are unmarshalled/ marshalled from/ to json
+	byteHandler func(context.Context, []byte) ([]byte, error)
+}
+
+func buildError(status int, message string) ([]byte, error) {
+	res := Res[ReturnError]{
+		Status: status,
+		Body: ReturnError{
+			Message: message,
+		},
+	}
+	return json.Marshal(res)
+}
+
+// One of the slightly more mindbendy functions. Take a generic handler function and map to concrete (byte array) types, but
+// embed the generic types in the unmarshal/ marshal
+func queryToByteHandlerAdapter[inputType any, outputType any](queryFunc func(context.Context, inputType) (outputType, error)) func(context.Context, []byte) ([]byte, error) {
+	return func(ctx context.Context, input []byte) ([]byte, error) {
+		var body inputType
+		err := json.Unmarshal(input, &body)
+		if err != nil {
+			return nil, fmt.Errorf("invalid input schema: %v", err)
+		}
+
+		err = validate.Struct(body)
+		if err != nil {
+			return nil, fmt.Errorf("validation of body failed: %v", err)
+		}
+
+		res, err := queryFunc(ctx, body)
+		if err != nil {
+			return buildError(500, err.Error())
+		}
+
+		responseObject := Res[outputType]{
+			Status: 200,
+			Body:   res,
+		}
+		return json.Marshal(responseObject)
+	}
+}
+
+func (p *Route[input, output]) AttachWithMiddleware(app *Crosser, headerMiddleware []HeaderMiddlewareFn) {
+	rr, err := p.createRouteRep(headerMiddleware)
+	if err != nil {
+		panic(err)
+	}
+	app.AddHandler(rr)
+}
+
+func (p *Route[input, output]) Attach(app *Crosser) {
+	p.AttachWithMiddleware(app, []HeaderMiddlewareFn{})
+}
+
+// Take the RouteContainer and any header middleware, and return a standard HTTP handler
 func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, req *http.Request) {
 		// Run through the middleware function and break out if any of them fail
@@ -100,10 +161,9 @@ func (c *Crosser) AddAdditionalHandlers(pathPrefix string, handler http.Handler)
 	c.router.PathPrefix("/assets/").Handler(http.StripPrefix("/assets/", http.FileServer(http.Dir("./static/assets/"))))
 }
 
+// Take the handlers and register them on the router
 func (c *Crosser) assembleHandlers() {
 	for _, query := range c.handlers {
-		// I know the input and output types. I need to map those to work
-		// with func(http.ResponseWriter, *http.Request)
 		f := buildHandler(query, query.HeaderMiddleware)
 		fmt.Println("Attaching route at", query.QueryPath)
 		c.router.HandleFunc(
@@ -153,6 +213,7 @@ func (c *Crosser) genCode() (string, error) {
 	converter.DontExport = false
 	converter.BackupDir = ""
 	converter.CreateInterface = true
+	converter.Quiet = true
 
 	for _, qr := range c.handlers {
 		converter.AddType(qr.InputType)
@@ -165,12 +226,12 @@ func (c *Crosser) genCode() (string, error) {
 				{Name: "headers?", Type: "HeadersInit | undefined"},
 			},
 			ReturnType: fmt.Sprintf("Promise<Response<%s>>", qr.OutputType.Name()),
-			Body: fmt.Sprintf(
+			Body: []string{fmt.Sprintf(
 				`return genFunc<%s, %s>(params, "%s", headers);`,
 				qr.InputType.Name(),
 				qr.OutputType.Name(),
 				qr.QueryPath,
-			),
+			)},
 		})
 	}
 
@@ -185,18 +246,18 @@ func (c *Crosser) genCode() (string, error) {
 			{Name: "headers?", Type: "HeadersInit | undefined"},
 		},
 		ReturnType: "Promise<Response<K>>",
-		Body: fmt.Sprintf(`
-const requestOptions: RequestInit = { method: "POST" };
-
-requestOptions.body = JSON.stringify(params as T);
-requestOptions.headers = headers;
-const host = "%s";
-
-const url = host + path;
-const res = await fetch(url, requestOptions);
-let body = await res.json() as Response<K>;
-
-return body;`, fmt.Sprintf("http://%s", c.host)),
+		Body: []string{
+			`const requestOptions: RequestInit = { method: "POST" };`,
+			`requestOptions.body = JSON.stringify(params as T);`,
+			`requestOptions.headers = headers;`,
+			``,
+			fmt.Sprintf(`const host = "http://%s";`, c.host),
+			`const url = host + path;`,
+			`const res = await fetch(url, requestOptions);`,
+			`let body = await res.json() as Response<K>;`,
+			``,
+			`return body;`,
+		},
 	})
 
 	code, err := converter.Convert(nil)
@@ -204,6 +265,7 @@ return body;`, fmt.Sprintf("http://%s", c.host)),
 		return "", err
 	}
 
+	// Export the base response interface
 	code += "\nexport interface Response<T> { Body: T; Status: number; Headers: Headers; }"
 
 	return code, nil

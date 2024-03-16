@@ -14,7 +14,9 @@ import (
 
 func TestHandlerSomething(t *testing.T) {
 	Convey("simple handler can be created", t, func() {
-		type getDirContentsRequest struct{ Name string }
+		type getDirContentsRequest struct {
+			Name string `validate:"required"`
+		}
 		type getDirContentsResponse struct{ Out string }
 
 		testFn := func(ctx context.Context, req getDirContentsRequest) (*getDirContentsResponse, error) {
@@ -28,27 +30,44 @@ func TestHandlerSomething(t *testing.T) {
 		So(err, ShouldBeNil)
 		handler := buildHandler(rr, nil)
 
-		input := getDirContentsRequest{
-			Name: "testname",
-		}
-		inputJson, err := json.Marshal(input)
-		So(err, ShouldBeNil)
-		r, _ := http.NewRequest("POST", "/something", bytes.NewBuffer(inputJson))
-		w := httptest.NewRecorder()
+		Convey("with valid input", func() {
+			input := getDirContentsRequest{
+				Name: "testname",
+			}
+			inputJson, err := json.Marshal(input)
+			So(err, ShouldBeNil)
+			r, _ := http.NewRequest("POST", "/something", bytes.NewBuffer(inputJson))
+			w := httptest.NewRecorder()
 
-		handler(w, r)
+			handler(w, r)
 
-		expectedRes := Res[getDirContentsResponse]{
-			Status: 200,
-			Body: getDirContentsResponse{
-				Out: "testname",
-			},
-		}
+			expectedRes := Res[getDirContentsResponse]{
+				Status: 200,
+				Body: getDirContentsResponse{
+					Out: "testname",
+				},
+			}
 
-		expectedResJson, err := json.Marshal(expectedRes)
-		So(err, ShouldBeNil)
-		body, _ := io.ReadAll(w.Body)
-		So(string(body), ShouldEqualJSON, string(expectedResJson))
+			expectedResJson, err := json.Marshal(expectedRes)
+			So(err, ShouldBeNil)
+			body, _ := io.ReadAll(w.Body)
+			So(string(body), ShouldEqualJSON, string(expectedResJson))
+		})
+
+		Convey("with invalid input", func() {
+			inputJson := `{ "invalid_key": "invalid_value" }`
+			r, _ := http.NewRequest("POST", "/something", bytes.NewBufferString(inputJson))
+			w := httptest.NewRecorder()
+
+			handler(w, r)
+
+			So(err, ShouldBeNil)
+			body, _ := io.ReadAll(w.Body)
+			var bodyRes Res[ReturnError]
+			_ = json.Unmarshal(body, &bodyRes)
+			So(bodyRes.Status, ShouldEqual, 500)
+			So(bodyRes.Body.Message, ShouldContainSubstring, "Error:Field validation for 'Name' failed on the 'required' tag")
+		})
 	})
 }
 
@@ -58,7 +77,7 @@ func TestBuildHandler(t *testing.T) {
 		// Mock RouteRep and middleware
 		mockRouteRep := &RouteContainer{
 			HandleFn: func(ctx context.Context, bytes []byte) ([]byte, error) {
-				return json.Marshal(Res[returnError]{Status: 200, Body: returnError{Message: "Success"}})
+				return json.Marshal(Res[ReturnError]{Status: 200, Body: ReturnError{Message: "Success"}})
 			},
 		}
 
@@ -87,7 +106,7 @@ func TestBuildHandler(t *testing.T) {
 
 		// Further checks can include inspecting the response body, headers, etc.
 		// For example, decoding JSON response and verifying the expected output.
-		var result Res[returnError]
+		var result Res[ReturnError]
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			t.Fatalf("Failed to decode response body: %v", err)
 		}
