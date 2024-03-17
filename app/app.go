@@ -11,9 +11,9 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/concolorcarne/crosser/typescriptify"
 	"github.com/go-playground/validator/v10"
 	"github.com/gorilla/mux"
-	"github.com/tkrajina/typescriptify-golang-structs/typescriptify"
 )
 
 type Crosser struct {
@@ -33,12 +33,12 @@ func New(host string, tsOutputLocation string) *Crosser {
 }
 
 type ReturnError struct {
-	Message string
+	ErrorMessage string
 }
 
 type Res[T any] struct {
 	Body   T
-	Status int
+	Status Status
 }
 
 type RouteHandler[input any, output any] func(ctx context.Context, query input) (*output, error)
@@ -62,13 +62,17 @@ type Route[input any, output any] struct {
 	byteHandler func(context.Context, []byte) ([]byte, error)
 }
 
-func buildError(status int, message string) ([]byte, error) {
+func buildError(status Status, message string) ([]byte, error) {
 	res := Res[ReturnError]{
 		Status: status,
 		Body: ReturnError{
-			Message: message,
+			ErrorMessage: message,
 		},
 	}
+	return writeResponse(res)
+}
+
+func writeResponse[T any](res Res[T]) ([]byte, error) {
 	return json.Marshal(res)
 }
 
@@ -89,14 +93,14 @@ func queryToByteHandlerAdapter[inputType any, outputType any](queryFunc func(con
 
 		res, err := queryFunc(ctx, body)
 		if err != nil {
-			return buildError(500, err.Error())
+			return buildError(STATUS_INTERNAL, err.Error())
 		}
 
 		responseObject := Res[outputType]{
-			Status: 200,
+			Status: STATUS_OK,
 			Body:   res,
 		}
-		return json.Marshal(responseObject)
+		return writeResponse(responseObject)
 	}
 }
 
@@ -119,7 +123,7 @@ func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(h
 		for _, mw := range middleware {
 			err := mw(req.Context(), req.Header)
 			if err != nil {
-				jsonError, err := buildError(500, fmt.Sprintf("unable to execute middleware: %v", err))
+				jsonError, err := buildError(STATUS_INTERNAL, fmt.Sprintf("unable to execute middleware: %v", err))
 				if err != nil {
 					http.Error(w, fmt.Sprintf("Unable to create json body: %v", err), 500)
 					return
@@ -132,7 +136,7 @@ func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(h
 		// Get request in the form of whatever, attempt to parse into expected structure
 		body, err := io.ReadAll(req.Body)
 		if err != nil {
-			jsonError, err := buildError(500, fmt.Sprintf("unable to read from body: %v", err))
+			jsonError, err := buildError(STATUS_INTERNAL, fmt.Sprintf("unable to read from body: %v", err))
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Unable to create json body: %v", err), 500)
 				return
@@ -143,7 +147,7 @@ func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(h
 
 		res, err := query.HandleFn(req.Context(), body)
 		if err != nil {
-			jsonError, err := buildError(500, fmt.Sprintf("unable to execute handler: %v", err))
+			jsonError, err := buildError(STATUS_INTERNAL, fmt.Sprintf("unable to execute handler: %v", err))
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Unable to create json body: %v", err), 500)
 				return
@@ -191,9 +195,22 @@ func (c *Crosser) writeCode() {
 	}
 }
 
+func notFoundHandler(w http.ResponseWriter, r *http.Request) {
+	body, err := buildError(STATUS_NOT_FOUND, "Not found")
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte("Page not found"))
+		return
+	}
+	w.WriteHeader(404)
+	w.Write(body)
+}
+
 func (c *Crosser) Start() {
 	c.assembleHandlers()
 	c.writeCode()
+
+	c.router.NotFoundHandler = http.HandlerFunc(notFoundHandler)
 
 	// todo: Handle SSL
 	addr := c.host
@@ -225,7 +242,7 @@ func (c *Crosser) genCode() (string, error) {
 				{Name: "params", Type: qr.InputType.Name()},
 				{Name: "headers?", Type: "HeadersInit | undefined"},
 			},
-			ReturnType: fmt.Sprintf("Promise<Response<%s>>", qr.OutputType.Name()),
+			ReturnType: fmt.Sprintf("Promise<Response<%s> | Error>", qr.OutputType.Name()),
 			Body: []string{fmt.Sprintf(
 				`return genFunc<%s, %s>(params, "%s", headers);`,
 				qr.InputType.Name(),
@@ -245,7 +262,7 @@ func (c *Crosser) genCode() (string, error) {
 			{Name: "path", Type: "string"},
 			{Name: "headers?", Type: "HeadersInit | undefined"},
 		},
-		ReturnType: "Promise<Response<K>>",
+		ReturnType: "Promise<Error | Response<K>>",
 		Body: []string{
 			`const requestOptions: RequestInit = { method: "POST" };`,
 			`requestOptions.body = JSON.stringify(params as T);`,
@@ -253,12 +270,56 @@ func (c *Crosser) genCode() (string, error) {
 			``,
 			fmt.Sprintf(`const host = "http://%s";`, c.host),
 			`const url = host + path;`,
-			`const res = await fetch(url, requestOptions);`,
-			`let body = await res.json() as Response<K>;`,
-			``,
-			`return body;`,
+			// Generate the code to handle fetch function errors
+			`let res;`,
+			`try { res = await fetch(url, requestOptions); }`,
+			`catch (e) {`,
+			`	return { Message: "Likely network error: " + e, Status: Status.STATUS_UNAVAILABLE, IsError: true } as Error;`,
+			`}`,
+
+			// Generate the code to handle non-JSON response errors
+			`let body;`,
+			`try { body = await res.json(); }`,
+			`catch (e) {`,
+			`	// couldn't cast to JSON`,
+			`	return { Message: e, Status: Status.STATUS_UNAVAILABLE, IsError: true } as Error;`,
+			`}`,
+
+			// Generate the code to handle the application returning an error
+			`// Check if it's an application error and try build into an Error response`,
+			`let innerBody = body["Body"];`,
+			`if (innerBody !== undefined && innerBody["ErrorMessage"] !== undefined) {`,
+			`	try {`,
+			`		let r = body as Response<ErrorRes>;`,
+			`		return { Message: r.Body.ErrorMessage, Status: r.Status, IsError: true } as Error;`,
+			`	} catch (e) {`,
+			`		return { Message: e, Status: Status.STATUS_UNAVAILABLE, IsError: true } as Error`,
+			`	}`,
+			`}`,
+
+			`try {`,
+			`	let r = body as Response<K>;`,
+			`	return r;`,
+			`} catch (e) {`,
+			`	return { Message: e, Status: Status.STATUS_UNAVAILABLE, IsError: true } as Error`,
+			`}`,
 		},
 	})
+
+	converter.AddFunction(typescriptify.TypeScriptFunction{
+		IsAsync:    false,
+		DontExport: false,
+		Name:       "isError",
+		Parameters: []typescriptify.FunctionParameter{
+			{Name: "possibleError", Type: "Error | Response<any>"},
+		},
+		ReturnType: "possibleError is Error",
+		Body: []string{
+			`return (possibleError as Error).IsError !== undefined;`,
+		},
+	})
+
+	converter.AddEnum(AllStatus)
 
 	code, err := converter.Convert(nil)
 	if err != nil {
@@ -266,7 +327,10 @@ func (c *Crosser) genCode() (string, error) {
 	}
 
 	// Export the base response interface
-	code += "\nexport interface Response<T> { Body: T; Status: number; Headers: Headers; }"
+	code += "\n"
+	code += "export interface Response<T> { Body: T; Status: Status; Headers: Headers; }\n"
+	code += "export interface Error { Message: String; IsError: boolean; Status: Status; }\n"
+	code += "export interface ErrorRes { ErrorMessage: String }\n"
 
 	return code, nil
 }

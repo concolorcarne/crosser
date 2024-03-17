@@ -53,7 +53,7 @@ func GetTokenMiddleware(ctx context.Context, headers http.Header) error {
 
 func main() {
 	a := app.New("localhost:8000", "./output.ts")
-	app.NewRoute(getDirContents).Attach(a, []app.HeaderMiddlewareFn{GetTokenMiddleware})
+	app.NewRoute(getDirContents).AttachWithMiddleware(a, []app.HeaderMiddlewareFn{GetTokenMiddleware})
 
 	a.AddAdditionalHandlers("/fe-dist/", http.StripPrefix("/fe-dist/", http.FileServer(http.Dir("./fe-dist/"))))
 

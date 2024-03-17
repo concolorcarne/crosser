@@ -42,13 +42,13 @@ func TestHandlerSomething(t *testing.T) {
 			handler(w, r)
 
 			expectedRes := Res[getDirContentsResponse]{
-				Status: 200,
+				Status: STATUS_OK,
 				Body: getDirContentsResponse{
 					Out: "testname",
 				},
 			}
 
-			expectedResJson, err := json.Marshal(expectedRes)
+			expectedResJson, err := writeResponse(expectedRes)
 			So(err, ShouldBeNil)
 			body, _ := io.ReadAll(w.Body)
 			So(string(body), ShouldEqualJSON, string(expectedResJson))
@@ -65,8 +65,8 @@ func TestHandlerSomething(t *testing.T) {
 			body, _ := io.ReadAll(w.Body)
 			var bodyRes Res[ReturnError]
 			_ = json.Unmarshal(body, &bodyRes)
-			So(bodyRes.Status, ShouldEqual, 500)
-			So(bodyRes.Body.Message, ShouldContainSubstring, "Error:Field validation for 'Name' failed on the 'required' tag")
+			So(bodyRes.Status, ShouldEqual, STATUS_INTERNAL)
+			So(bodyRes.Body.ErrorMessage, ShouldContainSubstring, "Error:Field validation for 'Name' failed on the 'required' tag")
 		})
 	})
 }
@@ -77,7 +77,7 @@ func TestBuildHandler(t *testing.T) {
 		// Mock RouteRep and middleware
 		mockRouteRep := &RouteContainer{
 			HandleFn: func(ctx context.Context, bytes []byte) ([]byte, error) {
-				return json.Marshal(Res[ReturnError]{Status: 200, Body: ReturnError{Message: "Success"}})
+				return json.Marshal(Res[ReturnError]{Status: 200, Body: ReturnError{ErrorMessage: "Success"}})
 			},
 		}
 
@@ -104,8 +104,6 @@ func TestBuildHandler(t *testing.T) {
 		// Check the response status code
 		So(resp.StatusCode, ShouldEqual, http.StatusOK)
 
-		// Further checks can include inspecting the response body, headers, etc.
-		// For example, decoding JSON response and verifying the expected output.
 		var result Res[ReturnError]
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			t.Fatalf("Failed to decode response body: %v", err)
