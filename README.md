@@ -136,7 +136,7 @@ I've tried to make the library implementation as simple as possible, but there's
 #### Routes
 The type signature for `NewRoute` is
 ```go
-func  NewRoute[input  any, output  any](queryFn  RouteHandler[input, output]) *Route[input, output] {
+func NewRoute[input any, output any](queryFn RouteHandler[input, output]) *Route[input, output] {
 ```
 
 Go's compiler is smart enough to simplify this in actual usage to `NewRoute(sayHelloHandler)` provided `sayHelloHandler` conforms to a specific shape.
@@ -145,7 +145,7 @@ Go's compiler is smart enough to simplify this in actual usage to `NewRoute(sayH
 
 You can think of the `byteHandler` as:
 ```go
-newByteHandler(handlerFn func(inputType) outputType) -> (func([]byte)  ([]byte))
+newByteHandler(handlerFn func(inputType) outputType) -> (func([]byte) ([]byte))
 ```
 where the function that's returned has the concrete types 'baked in'. This is to work around Go's limitations when handling generic arguments in methods on a struct.
 
