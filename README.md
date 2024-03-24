@@ -12,16 +12,16 @@ Crosser is a project heavily inspired by [tRPC](https://github.com/trpc/trpc), [
 Usage is reasonably straightforward. You generate a basic handler:
 
 ```go
-type  sayHelloRequest  struct {
-	Name  string
+type sayHelloRequest struct {
+	Name string
 }
 
-type  sayHelloResponse  struct {
-	Message  string
+type sayHelloResponse struct {
+	Message string
 }
 
-func  sayHelloHandler(_  context.Context, req  sayHelloRequest) (*sayHelloResponse, error) {
-	return  &sayHelloResponse{
+func sayHelloHandler(_ context.Context, req sayHelloRequest) (*sayHelloResponse, error) {
+	return &sayHelloResponse{
 		Message: fmt.Sprintf("Hello, %s!", req.Name),
 	}, nil
 }
@@ -30,7 +30,7 @@ func  sayHelloHandler(_  context.Context, req  sayHelloRequest) (*sayHelloRespon
 Then attach the handler to the application and start the app:
 
 ```go
-a  :=  app.New("localhost:8000", "./output.ts")
+a := app.New("localhost:8000", "./output.ts")
 app.NewRoute(sayHelloHandler).Attach(a)
 
 a.Start()
@@ -46,7 +46,7 @@ export interface sayHelloResponse {
 	Message?: string;
 }
 
-export  async  function  sayHello(params: sayHelloRequest, headers?: HeadersInit):  Promise<Response<sayHelloResponse> |  Error> {
+export async function sayHello(params: sayHelloRequest, headers?: HeadersInit): Promise<Response<sayHelloResponse> | Error> {
 	return genFunc<sayHelloRequest, sayHelloResponse>(params, "/crosser/sayHello", headers);
 }
 ```
@@ -54,9 +54,9 @@ export  async  function  sayHello(params: sayHelloRequest, headers?: HeadersInit
 There's additional boilerplate (like the `genFunc` function) which enables the application to work, but this can now called from your application:
 
 ```typescript
-import { sayHello } from  '../output'
+import { sayHello } from '../output'
 ...
-sayHello({ Name:  "Batman" }).then(res  => {
+sayHello({ Name: "Batman" }).then(res => {
 	console.log(res.Body?.Message);
 }
 ```
@@ -66,7 +66,7 @@ Note, this example doesn't deal with error handling for you. There's an `isError
 ```typescript
 import { sayHello, isError} from '../output'
 ...
-sayHello({ Name:  "Batman" }).then(res  => {
+sayHello({ Name: "Batman" }).then(res => {
 	if (isError(res)) {
 		console.log("got error:", res)
 		return
@@ -80,11 +80,11 @@ Now there's no need to check for the presence of `Body`, as the Typescript compi
 ### Additional generation options
 If you want to mark a field as required in the Typescript output, or change the name of the exported field, this can be achieved through tags on the structs:
 ```go
-type  sayHelloRequest  struct {
+type sayHelloRequest struct {
 	Name string `validate:"required" json:"input_name"`
 }
 
-type  sayHelloResponse  struct {
+type sayHelloResponse struct {
 	Message string `validate:"required"`
 }
 ```
