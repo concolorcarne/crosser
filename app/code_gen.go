@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/concolorcarne/crosser/typescriptify"
@@ -156,6 +157,16 @@ func (c *Crosser) genCode() (string, error) {
 	code += "export interface Response<T> { Body: T; Status: Status; Headers: Headers; }\n"
 	code += "export interface Error { Message: String; IsError: boolean; Status: Status; }\n"
 	code += "export interface ErrorRes { ErrorMessage: String }\n"
+
+	// Export the constants, if there are any. We don't need to export the type
+	// as this is just an object of known shape
+	if c.appConstants != nil {
+		bytes, err := json.MarshalIndent(c.appConstants, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		code += fmt.Sprintf("\nexport const AppConstants = %s;\n", string(bytes))
+	}
 
 	return code, nil
 }

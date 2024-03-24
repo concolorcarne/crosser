@@ -21,6 +21,7 @@ type Crosser struct {
 	router           *mux.Router
 	tsOutputLocation string
 	headerType       reflect.Type
+	appConstants     any
 }
 
 func New(host string, tsOutputLocation string) *Crosser {
@@ -304,4 +305,8 @@ func (c *Crosser) AddHandler(q *RouteContainer) {
 	}
 
 	c.handlers = append(c.handlers, q)
+}
+
+func (c *Crosser) AddAppConstants(appConstants any) {
+	c.appConstants = appConstants
 }
