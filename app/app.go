@@ -11,17 +11,16 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/concolorcarne/crosser/typescriptify"
 	"github.com/go-playground/validator/v10"
 	"github.com/gorilla/mux"
 )
 
 type Crosser struct {
-	// Relax the type constraints here, as they'll be enforced when creating the handlers?
 	handlers         []*RouteContainer
 	host             string
 	router           *mux.Router
 	tsOutputLocation string
+	headerType       reflect.Type
 }
 
 func New(host string, tsOutputLocation string) *Crosser {
@@ -104,7 +103,7 @@ func queryToByteHandlerAdapter[inputType any, outputType any](queryFunc func(con
 	}
 }
 
-func (p *Route[input, output]) AttachWithMiddleware(app *Crosser, headerMiddleware []HeaderMiddlewareFn) {
+func (p *Route[input, output]) AttachWithMiddleware(app *Crosser, headerMiddleware ...HeaderMiddlewareFn) {
 	rr, err := p.createRouteRep(headerMiddleware)
 	if err != nil {
 		panic(err)
@@ -112,13 +111,31 @@ func (p *Route[input, output]) AttachWithMiddleware(app *Crosser, headerMiddlewa
 	app.AddHandler(rr)
 }
 
+// Just an alias for AttachWithMiddleware
 func (p *Route[input, output]) Attach(app *Crosser) {
-	p.AttachWithMiddleware(app, []HeaderMiddlewareFn{})
+	p.AttachWithMiddleware(app)
+}
+
+type perfDetail struct {
+	routeName        string
+	middlewareTiming time.Duration
+	handlerTiming    time.Duration
+}
+
+func padString(str string, maxLength int) string {
+	// non-ascii characters take up more than one byte, whereas len(str) returns the number of bytes
+	actualLength := len([]rune(str))
+	return fmt.Sprintf("%s%*s", str, maxLength-actualLength, "")
 }
 
 // Take the RouteContainer and any header middleware, and return a standard HTTP handler
 func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, req *http.Request) {
+		perf := perfDetail{
+			routeName: query.FnName,
+		}
+		start := time.Now()
+
 		// Run through the middleware function and break out if any of them fail
 		for _, mw := range middleware {
 			err := mw(req.Context(), req.Header)
@@ -132,6 +149,8 @@ func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(h
 				return
 			}
 		}
+		perf.middlewareTiming = time.Since(start)
+		start = time.Now()
 
 		// Get request in the form of whatever, attempt to parse into expected structure
 		body, err := io.ReadAll(req.Body)
@@ -146,6 +165,7 @@ func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(h
 		}
 
 		res, err := query.HandleFn(req.Context(), body)
+		perf.handlerTiming = time.Since(start)
 		if err != nil {
 			jsonError, err := buildError(STATUS_INTERNAL, fmt.Sprintf("unable to execute handler: %v", err))
 			if err != nil {
@@ -155,6 +175,13 @@ func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(h
 			w.Write(jsonError)
 			return
 		}
+
+		fmt.Printf(
+			"%s %s %s\n",
+			padString(fmt.Sprintf("[%s]", perf.routeName), 20),
+			padString(fmt.Sprintf("Middleware: %v", perf.middlewareTiming), 30),
+			fmt.Sprintf("Handler: %v", perf.handlerTiming),
+		)
 
 		w.Write(res)
 	}
@@ -167,19 +194,42 @@ func (c *Crosser) AddAdditionalHandlers(pathPrefix string, handler http.Handler)
 
 // Take the handlers and register them on the router
 func (c *Crosser) assembleHandlers() {
+	longestRoute := 0
+	longestInput := 0
+	longestOutput := 0
 	for _, query := range c.handlers {
 		f := buildHandler(query, query.HeaderMiddleware)
-		fmt.Println("Attaching route at", query.QueryPath)
+		// We know that input and output types have to follow a particular pattern
+		// so we can assume if something is the longest route, it's also longest
+		// input and output
+		if len(query.QueryPath) > longestRoute {
+			longestRoute = len(query.QueryPath)
+			longestInput = len(query.InputType.Name())
+			longestOutput = len(query.OutputType.Name())
+		}
+
 		c.router.HandleFunc(
 			query.QueryPath,
 			f,
 		).Methods("POST")
+	}
+
+	// Add spaces so all are the same length, I'm sure there's a nicer way to do this
+	// This'll also be way more useful if I have the actual TS types at this point
+	for _, query := range c.handlers {
+		outputStr := padString(query.QueryPath, longestRoute)
+		paddedInputString := padString(query.InputType.Name(), longestInput)
+		paddedOutputString := padString(query.OutputType.Name(), longestOutput)
+
+		outputStr += fmt.Sprintf("\t [%s -> %s]", paddedInputString, paddedOutputString)
+		fmt.Println("Attaching: " + outputStr)
 	}
 }
 
 func (c *Crosser) writeCode() {
 	if c.tsOutputLocation == "" {
 		// Skip writing code out
+		fmt.Println("Not writing out code as tsOutputLocation is blank")
 		return
 	}
 
@@ -207,8 +257,11 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Crosser) Start() {
+	start := time.Now()
 	c.assembleHandlers()
+	fmt.Printf("Assembled handlers in %v\n", time.Since(start))
 	c.writeCode()
+	fmt.Printf("Wrote code in %v\n", time.Since(start))
 
 	c.router.NotFoundHandler = http.HandlerFunc(notFoundHandler)
 
@@ -225,114 +278,13 @@ func (c *Crosser) Start() {
 	log.Fatal(srv.ListenAndServe())
 }
 
-func (c *Crosser) genCode() (string, error) {
-	converter := typescriptify.New()
-	converter.DontExport = false
-	converter.BackupDir = ""
-	converter.CreateInterface = true
-	converter.Quiet = true
-
-	for _, qr := range c.handlers {
-		converter.AddType(qr.InputType)
-		converter.AddType(qr.OutputType)
-		converter.AddFunction(typescriptify.TypeScriptFunction{
-			IsAsync: true,
-			Name:    qr.FnName,
-			Parameters: []typescriptify.FunctionParameter{
-				{Name: "params", Type: qr.InputType.Name()},
-				{Name: "headers?", Type: "HeadersInit | undefined"},
-			},
-			ReturnType: fmt.Sprintf("Promise<Response<%s> | Error>", qr.OutputType.Name()),
-			Body: []string{fmt.Sprintf(
-				`return genFunc<%s, %s>(params, "%s", headers);`,
-				qr.InputType.Name(),
-				qr.OutputType.Name(),
-				qr.QueryPath,
-			)},
-		})
+func (c *Crosser) AddHeaderType(header any) {
+	if c.headerType != nil {
+		panic("Header type already set")
 	}
+	checkIfQueryStruct(header)
 
-	// Generate the 'base' function, then generate the additional functions
-	converter.AddFunction(typescriptify.TypeScriptFunction{
-		IsAsync:    true,
-		DontExport: true,
-		Name:       "genFunc<T, K>",
-		Parameters: []typescriptify.FunctionParameter{
-			{Name: "params", Type: "T"},
-			{Name: "path", Type: "string"},
-			{Name: "headers?", Type: "HeadersInit | undefined"},
-		},
-		ReturnType: "Promise<Error | Response<K>>",
-		Body: []string{
-			`const requestOptions: RequestInit = { method: "POST" };`,
-			`requestOptions.body = JSON.stringify(params as T);`,
-			`requestOptions.headers = headers;`,
-			``,
-			fmt.Sprintf(`const host = "http://%s";`, c.host),
-			`const url = host + path;`,
-			// Generate the code to handle fetch function errors
-			`let res;`,
-			`try { res = await fetch(url, requestOptions); }`,
-			`catch (e) {`,
-			`	return { Message: "Likely network error: " + e, Status: Status.STATUS_UNAVAILABLE, IsError: true } as Error;`,
-			`}`,
-
-			// Generate the code to handle non-JSON response errors
-			`let body;`,
-			`try { body = await res.json(); }`,
-			`catch (e) {`,
-			`	// couldn't cast to JSON`,
-			`	return { Message: e, Status: Status.STATUS_UNAVAILABLE, IsError: true } as Error;`,
-			`}`,
-
-			// Generate the code to handle the application returning an error
-			`// Check if it's an application error and try build into an Error response`,
-			`let innerBody = body["Body"];`,
-			`if (innerBody !== undefined && innerBody["ErrorMessage"] !== undefined) {`,
-			`	try {`,
-			`		let r = body as Response<ErrorRes>;`,
-			`		return { Message: r.Body.ErrorMessage, Status: r.Status, IsError: true } as Error;`,
-			`	} catch (e) {`,
-			`		return { Message: e, Status: Status.STATUS_UNAVAILABLE, IsError: true } as Error`,
-			`	}`,
-			`}`,
-
-			`try {`,
-			`	let r = body as Response<K>;`,
-			`	return r;`,
-			`} catch (e) {`,
-			`	return { Message: e, Status: Status.STATUS_UNAVAILABLE, IsError: true } as Error`,
-			`}`,
-		},
-	})
-
-	converter.AddFunction(typescriptify.TypeScriptFunction{
-		IsAsync:    false,
-		DontExport: false,
-		Name:       "isError",
-		Parameters: []typescriptify.FunctionParameter{
-			{Name: "possibleError", Type: "Error | Response<any>"},
-		},
-		ReturnType: "possibleError is Error",
-		Body: []string{
-			`return (possibleError as Error).IsError !== undefined;`,
-		},
-	})
-
-	converter.AddEnum(AllStatus)
-
-	code, err := converter.Convert(nil)
-	if err != nil {
-		return "", err
-	}
-
-	// Export the base response interface
-	code += "\n"
-	code += "export interface Response<T> { Body: T; Status: Status; Headers: Headers; }\n"
-	code += "export interface Error { Message: String; IsError: boolean; Status: Status; }\n"
-	code += "export interface ErrorRes { ErrorMessage: String }\n"
-
-	return code, nil
+	c.headerType = reflect.TypeOf(header)
 }
 
 // I can use handlers to build up a collection of types to generate

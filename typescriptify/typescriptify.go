@@ -319,7 +319,7 @@ func (t *TypeScriptify) convertFunction(depth int, funcDef TypeScriptFunction) (
 	}
 
 	funcCode := fmt.Sprintf(
-		"%s%sfunction %s(%s): %s {\n%s\n}\n",
+		"%s%sfunction %s(%s): %s {\n%s}\n",
 		exportString,
 		asyncString,
 		funcDef.Name,
