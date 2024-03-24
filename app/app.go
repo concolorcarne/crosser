@@ -238,8 +238,13 @@ func (c *Crosser) writeCode() {
 		panic(err)
 	}
 
-	os.Remove(c.tsOutputLocation)
-	err = os.WriteFile(c.tsOutputLocation, []byte(code), 0777)
+	// Call create on the existing file, which'll overwrite whatever was there
+	f, err := os.Create(c.tsOutputLocation)
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = f.Write([]byte(code))
 	if err != nil {
 		panic(err)
 	}
@@ -259,9 +264,9 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 func (c *Crosser) Start() {
 	start := time.Now()
 	c.assembleHandlers()
-	fmt.Printf("Assembled handlers in %v\n", time.Since(start))
+	fmt.Printf("\nAssembled handlers in %v\n", time.Since(start))
 	c.writeCode()
-	fmt.Printf("Wrote code in %v\n", time.Since(start))
+	fmt.Printf("%s %v\n\n", padString("Wrote code in", 21), time.Since(start))
 
 	c.router.NotFoundHandler = http.HandlerFunc(notFoundHandler)
 
@@ -290,5 +295,12 @@ func (c *Crosser) AddHeaderType(header any) {
 // I can use handlers to build up a collection of types to generate
 // Can I then also build the actual HTTP handlers
 func (c *Crosser) AddHandler(q *RouteContainer) {
+	// Check that there's not already another handler on the same route
+	for _, handler := range c.handlers {
+		if handler.QueryPath == q.QueryPath {
+			panic(fmt.Sprintf("Duplicate handler for route: %s", q.FnName))
+		}
+	}
+
 	c.handlers = append(c.handlers, q)
 }
