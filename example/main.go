@@ -25,7 +25,6 @@ type getDirContentsResponse struct {
 }
 
 func getDirContents(ctx context.Context, req getDirContentsRequest) (*getDirContentsResponse, error) {
-	// Do something with the token...
 	dirContents, err := os.ReadDir(req.Path)
 	if err != nil {
 		return nil, fmt.Errorf("error looking up directory: %v", err)
@@ -43,6 +42,20 @@ func getDirContents(ctx context.Context, req getDirContentsRequest) (*getDirCont
 	}, nil
 }
 
+type sayHelloRequest struct {
+	Name string `validate:"required" json:"input_name"`
+}
+
+type sayHelloResponse struct {
+	Message string `validate:"required"`
+}
+
+func sayHelloHandler(_ context.Context, req sayHelloRequest) (*sayHelloResponse, error) {
+	return &sayHelloResponse{
+		Message: fmt.Sprintf("Hello, %s!", req.Name),
+	}, nil
+}
+
 func GetTokenMiddleware(ctx context.Context, headers http.Header) error {
 	token := headers.Get("token")
 	if token != "secret-token" {
@@ -54,8 +67,7 @@ func GetTokenMiddleware(ctx context.Context, headers http.Header) error {
 func main() {
 	a := app.New("localhost:8000", "./output.ts")
 	app.NewRoute(getDirContents).AttachWithMiddleware(a, GetTokenMiddleware)
-
-	a.AddAdditionalHandlers("/fe-dist/", http.StripPrefix("/fe-dist/", http.FileServer(http.Dir("./fe-dist/"))))
+	app.NewRoute(sayHelloHandler).Attach(a)
 
 	a.Start()
 }

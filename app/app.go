@@ -187,7 +187,8 @@ func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(h
 	}
 }
 
-func (c *Crosser) AddAdditionalHandlers(pathPrefix string, handler http.Handler) {
+// This is not good. It makes assumptions about the library user's file structure. Clean up
+func (c *Crosser) AddAdditionalHandlers() {
 	c.router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 	c.router.PathPrefix("/assets/").Handler(http.StripPrefix("/assets/", http.FileServer(http.Dir("./static/assets/"))))
 }
