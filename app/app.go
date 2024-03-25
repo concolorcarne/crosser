@@ -180,7 +180,7 @@ func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(h
 		fmt.Printf(
 			"%s %s %s\n",
 			padString(fmt.Sprintf("[%s]", perf.routeName), 20),
-			padString(fmt.Sprintf("Middleware: %v", perf.middlewareTiming), 30),
+			padString(fmt.Sprintf("Middleware: %v", perf.middlewareTiming), 25),
 			fmt.Sprintf("Handler: %v", perf.handlerTiming),
 		)
 
@@ -190,24 +190,20 @@ func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(h
 
 // This is not good. It makes assumptions about the library user's file structure. Clean up
 func (c *Crosser) AddAdditionalHandlers() {
-	c.router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
-	c.router.PathPrefix("/assets/").Handler(http.StripPrefix("/assets/", http.FileServer(http.Dir("./static/assets/"))))
+	c.router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./manage/static/"))))
+	c.router.PathPrefix("/assets/").Handler(http.StripPrefix("/assets/", http.FileServer(http.Dir("./manage/static/assets/"))))
 }
 
 // Take the handlers and register them on the router
 func (c *Crosser) assembleHandlers() {
-	longestRoute := 0
-	longestInput := 0
-	longestOutput := 0
-	for _, query := range c.handlers {
+	longestIndex := 0
+	for idx, query := range c.handlers {
 		f := buildHandler(query, query.HeaderMiddleware)
 		// We know that input and output types have to follow a particular pattern
 		// so we can assume if something is the longest route, it's also longest
 		// input and output
-		if len(query.QueryPath) > longestRoute {
-			longestRoute = len(query.QueryPath)
-			longestInput = len(query.InputType.Name())
-			longestOutput = len(query.OutputType.Name())
+		if len(query.QueryPath) > len(c.handlers[longestIndex].QueryPath) {
+			longestIndex = idx
 		}
 
 		c.router.HandleFunc(
@@ -216,12 +212,11 @@ func (c *Crosser) assembleHandlers() {
 		).Methods("POST")
 	}
 
-	// Add spaces so all are the same length, I'm sure there's a nicer way to do this
-	// This'll also be way more useful if I have the actual TS types at this point
+	// This'll be way more useful if I have the actual TS types at this point
 	for _, query := range c.handlers {
-		outputStr := padString(query.QueryPath, longestRoute)
-		paddedInputString := padString(query.InputType.Name(), longestInput)
-		paddedOutputString := padString(query.OutputType.Name(), longestOutput)
+		outputStr := padString(query.QueryPath, len(c.handlers[longestIndex].QueryPath))
+		paddedInputString := padString(query.InputType.Name(), len(c.handlers[longestIndex].InputType.Name()))
+		paddedOutputString := padString(query.OutputType.Name(), len(c.handlers[longestIndex].OutputType.Name()))
 
 		outputStr += fmt.Sprintf("\t [%s -> %s]", paddedInputString, paddedOutputString)
 		fmt.Println("Attaching: " + outputStr)
