@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 
 	"github.com/concolorcarne/tinyrpc/app"
@@ -56,17 +55,18 @@ func sayHelloHandler(_ context.Context, req sayHelloRequest) (*sayHelloResponse,
 	}, nil
 }
 
-func GetTokenMiddleware(ctx context.Context, headers http.Header) error {
-	token := headers.Get("token")
-	if token != "secret-token" {
-		return fmt.Errorf("invalid secret token")
-	}
-	return nil
-}
+const secretTokenValue = "123456"
 
+func GetTokenMiddleware(ctx context.Context, req any, method string, handler app.MiddlewareHandler) (any, error) {
+	token := app.GetHeader(ctx, "token")
+	if token != secretTokenValue {
+		return nil, fmt.Errorf("invalid secret token")
+	}
+	return handler(ctx, req)
+}
 func main() {
 	a := app.New("localhost:8000", "./output.ts")
-	app.NewRoute(getDirContents).AttachWithMiddleware(a)
+	app.NewRoute(getDirContents).AttachWithMiddleware(a, GetTokenMiddleware)
 	app.NewRoute(sayHelloHandler).Attach(a)
 
 	a.Start()

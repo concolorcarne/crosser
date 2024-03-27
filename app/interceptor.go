@@ -2,10 +2,10 @@ package app
 
 import "context"
 
-type Interceptor = func(ctx context.Context, req any, method string, handler CollapsedInterceptor) (any, error)
-type CollapsedInterceptor = func(ctx context.Context, req any) (any, error)
+type MiddlewareFn = func(ctx context.Context, req any, method string, handler MiddlewareHandler) (any, error)
+type MiddlewareHandler = func(ctx context.Context, req any) (any, error)
 
-func collapseInterceptors(functions []Interceptor, method string, finalFn CollapsedInterceptor) CollapsedInterceptor {
+func collapseInterceptors(functions []MiddlewareFn, method string, finalFn MiddlewareHandler) MiddlewareHandler {
 	if len(functions) == 0 {
 		return finalFn
 	} else {
@@ -15,7 +15,7 @@ func collapseInterceptors(functions []Interceptor, method string, finalFn Collap
 
 // This basically maps the interceptor type -> finalFn type, with the handler
 // populated with the next function
-func chainFunctions(functions []Interceptor, method string, finalFn CollapsedInterceptor, current int) CollapsedInterceptor {
+func chainFunctions(functions []MiddlewareFn, method string, finalFn MiddlewareHandler, current int) MiddlewareHandler {
 	if current == len(functions) {
 		return finalFn
 	}

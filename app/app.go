@@ -49,7 +49,7 @@ type RouteContainer struct {
 	FnName             string
 	HandleFn           func(context.Context, any) (any, error)
 	QueryPath          string
-	ChainedInterceptor []CollapsedInterceptor
+	ChainedInterceptor []MiddlewareHandler
 }
 
 var validate *validator.Validate
@@ -102,7 +102,7 @@ func queryToByteHandlerAdapter[inputType any, outputType any](queryFunc func(con
 	}
 }
 
-func (p *Route[input, output]) AttachWithMiddleware(app *TinyRPC, headerMiddleware ...Interceptor) {
+func (p *Route[input, output]) AttachWithMiddleware(app *TinyRPC, headerMiddleware ...MiddlewareFn) {
 	rr, err := p.createRouteRep(headerMiddleware)
 	if err != nil {
 		panic(err)

@@ -59,7 +59,7 @@ func extractRouteIOName[inputType any, outputType any]() (string, error) {
 	return inputName, nil
 }
 
-func (p *Route[input, output]) createRouteRep(interceptors []Interceptor) (*RouteContainer, error) {
+func (p *Route[input, output]) createRouteRep(interceptors []MiddlewareFn) (*RouteContainer, error) {
 	inputName, err := extractRouteIOName[input, output]()
 
 	if err != nil {
@@ -68,7 +68,7 @@ func (p *Route[input, output]) createRouteRep(interceptors []Interceptor) (*Rout
 
 	queryPath := fmt.Sprintf("/tinyrpc/%s", inputName)
 	if interceptors == nil {
-		interceptors = []Interceptor{}
+		interceptors = []MiddlewareFn{}
 	}
 
 	chainedInterceptors := collapseInterceptors(interceptors, inputName, p.byteHandler)

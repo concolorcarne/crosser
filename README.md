@@ -105,16 +105,20 @@ The ergonomics of this might change, as I've found that I'm generally marking fi
 It's possible to add middleware to requests using `AttachWithMiddleware` instead of `Attach`. An example middleware would look something like:
 
 ```go
-func GetTokenMiddleware(ctx context.Context, headers http.Header) error {
-	token := headers.Get("token")
-	if token != "secret-token" {
-		return fmt.Errorf("invalid secret token")
+func (a *appState) GetTokenMiddleware(ctx context.Context, req any, method string, handler app.MiddlewareHandler) (any, error) {
+	token := app.GetHeader(ctx, "token")
+	if a.loginToken == "" {
+		return nil, fmt.Errorf("no login token set")
 	}
-	return nil
+	if token != a.loginToken {
+		return nil, fmt.Errorf("invalid secret token")
+	}
+	return handler(ctx, req)
 }
 ```
 
-If the middleware returns an error, the handler as a whole will return an error. The ergonomics of this currently feels a little too _leaky_. It's likely to change in the future.
+The HTTP Headers are injected into the context, so you can use `GetHeader` to retrieve them. `GetHeader` will return an empty string if the header isn't present. The `MiddlewareHandler` is the next handler in the chain, so you can call it to continue processing the request. It's signature is effectively the same as the other handlers, but is more permissive (using `any`) to satisify the compiler.
+
 
 Note, there's an [example](./example) directory that shows a basic `main.go` file and the generated output.
 
@@ -122,13 +126,13 @@ Note, there's an [example](./example) directory that shows a basic `main.go` fil
 
 ## FAQ
 ### Why not gRPC?
-Setting up a gRPC build pipeline is the right choice for more mature projects, and something like [buf](http://buf.build) aims to make that part of the process less painful. But if the idea of screwing around with build pipelines for a little personal project isn't super appealing to you, this project (or some of the ones highlighted above) may be better fit.
+Setting up a gRPC build pipeline is the right choice for more mature projects, and something like [buf](http://buf.build) aims to make that part of the process less painful. But if the idea of screwing around with build pipelines for a small personal project isn't super appealing to you, this project (or some of the ones highlighted above) may be better fit.
 
 ### Should I use this in production?
 On the one hand, probably not as it's not been tested in production anywhere. On the other, under the hood it's just a wrapper around the basic Go HTTP handlers and a `mux` router, which have been tested heavily in production. It's up to you!
 
 ### How stable is the API?
-Not very! I'm exploring the ergonomics of the API at the moment and it's liable to change dramatically in breaking ways if something is a better fit. One of the things that I'm exploring right now is how to handle typed middleware. What I've come up with doesn't feel optimal, so that's likely to change.
+Not very! I'm exploring the ergonomics of the API at the moment and it's liable to change dramatically in breaking ways if something is a better fit.
 
 ### How does this work under the hood?
 I've tried to make the library implementation as simple as possible, but there's some inherent complexity in building this, especially in Go.
