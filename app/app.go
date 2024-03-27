@@ -15,7 +15,7 @@ import (
 	"github.com/gorilla/mux"
 )
 
-type Crosser struct {
+type TinyRPC struct {
 	handlers         []*RouteContainer
 	host             string
 	router           *mux.Router
@@ -24,8 +24,8 @@ type Crosser struct {
 	appConstants     any
 }
 
-func New(host string, tsOutputLocation string) *Crosser {
-	return &Crosser{
+func New(host string, tsOutputLocation string) *TinyRPC {
+	return &TinyRPC{
 		host:             host,
 		router:           mux.NewRouter(),
 		tsOutputLocation: tsOutputLocation,
@@ -43,15 +43,13 @@ type Res[T any] struct {
 
 type RouteHandler[input any, output any] func(ctx context.Context, query input) (*output, error)
 
-type HeaderMiddlewareFn func(ctx context.Context, headers http.Header) error
-
 type RouteContainer struct {
-	InputType        reflect.Type
-	OutputType       reflect.Type
-	FnName           string
-	HandleFn         func(context.Context, []byte) ([]byte, error)
-	QueryPath        string
-	HeaderMiddleware []HeaderMiddlewareFn
+	InputType          reflect.Type
+	OutputType         reflect.Type
+	FnName             string
+	HandleFn           func(context.Context, any) (any, error)
+	QueryPath          string
+	ChainedInterceptor []CollapsedInterceptor
 }
 
 var validate *validator.Validate
@@ -59,7 +57,7 @@ var validate *validator.Validate
 type Route[input any, output any] struct {
 	// A handler that matches the shape of the generic function
 	// but deals in bytes that are unmarshalled/ marshalled from/ to json
-	byteHandler func(context.Context, []byte) ([]byte, error)
+	byteHandler func(context.Context, any) (any, error)
 }
 
 func buildError(status Status, message string) ([]byte, error) {
@@ -78,10 +76,10 @@ func writeResponse[T any](res Res[T]) ([]byte, error) {
 
 // One of the slightly more mindbendy functions. Take a generic handler function and map to concrete (byte array) types, but
 // embed the generic types in the unmarshal/ marshal
-func queryToByteHandlerAdapter[inputType any, outputType any](queryFunc func(context.Context, inputType) (outputType, error)) func(context.Context, []byte) ([]byte, error) {
-	return func(ctx context.Context, input []byte) ([]byte, error) {
+func queryToByteHandlerAdapter[inputType any, outputType any](queryFunc func(context.Context, inputType) (outputType, error)) func(context.Context, any) (any, error) {
+	return func(ctx context.Context, input any) (any, error) {
 		var body inputType
-		err := json.Unmarshal(input, &body)
+		err := json.Unmarshal(input.([]byte), &body)
 		if err != nil {
 			return nil, fmt.Errorf("invalid input schema: %v", err)
 		}
@@ -104,7 +102,7 @@ func queryToByteHandlerAdapter[inputType any, outputType any](queryFunc func(con
 	}
 }
 
-func (p *Route[input, output]) AttachWithMiddleware(app *Crosser, headerMiddleware ...HeaderMiddlewareFn) {
+func (p *Route[input, output]) AttachWithMiddleware(app *TinyRPC, headerMiddleware ...Interceptor) {
 	rr, err := p.createRouteRep(headerMiddleware)
 	if err != nil {
 		panic(err)
@@ -113,14 +111,8 @@ func (p *Route[input, output]) AttachWithMiddleware(app *Crosser, headerMiddlewa
 }
 
 // Just an alias for AttachWithMiddleware
-func (p *Route[input, output]) Attach(app *Crosser) {
+func (p *Route[input, output]) Attach(app *TinyRPC) {
 	p.AttachWithMiddleware(app)
-}
-
-type perfDetail struct {
-	routeName        string
-	middlewareTiming time.Duration
-	handlerTiming    time.Duration
 }
 
 func padString(str string, maxLength int) string {
@@ -129,29 +121,32 @@ func padString(str string, maxLength int) string {
 	return fmt.Sprintf("%s%*s", str, maxLength-actualLength, "")
 }
 
-// Take the RouteContainer and any header middleware, and return a standard HTTP handler
-func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, req *http.Request) {
-		perf := perfDetail{
-			routeName: query.FnName,
-		}
-		start := time.Now()
+type tinyRPCHeaderValue struct{}
 
-		// Run through the middleware function and break out if any of them fail
-		for _, mw := range middleware {
-			err := mw(req.Context(), req.Header)
-			if err != nil {
-				jsonError, err := buildError(STATUS_INTERNAL, fmt.Sprintf("unable to execute middleware: %v", err))
-				if err != nil {
-					http.Error(w, fmt.Sprintf("Unable to create json body: %v", err), 500)
-					return
-				}
-				w.Write(jsonError)
-				return
-			}
-		}
-		perf.middlewareTiming = time.Since(start)
-		start = time.Now()
+var tinyRPCHeaderValueKey = tinyRPCHeaderValue{}
+
+// I want to inject the HTTP Headers into the context here
+func addHeadersToContext(ctx context.Context, headers http.Header) context.Context {
+	headerMap := make(map[string]string)
+	for key, value := range headers {
+		headerMap[key] = value[0]
+	}
+	return context.WithValue(ctx, tinyRPCHeaderValueKey, headerMap)
+}
+
+func GetHeader(ctx context.Context, key string) string {
+	headers := ctx.Value(tinyRPCHeaderValueKey)
+	if headers == nil {
+		return ""
+	}
+	canonicalKey := http.CanonicalHeaderKey(key)
+	return headers.(map[string]string)[canonicalKey]
+}
+
+// Take the RouteContainer and any header middleware, and return a standard HTTP handler
+func buildHandler(query *RouteContainer) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, req *http.Request) {
+		ctx := addHeadersToContext(req.Context(), req.Header)
 
 		// Get request in the form of whatever, attempt to parse into expected structure
 		body, err := io.ReadAll(req.Body)
@@ -165,8 +160,7 @@ func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(h
 			return
 		}
 
-		res, err := query.HandleFn(req.Context(), body)
-		perf.handlerTiming = time.Since(start)
+		res, err := query.HandleFn(ctx, body)
 		if err != nil {
 			jsonError, err := buildError(STATUS_INTERNAL, fmt.Sprintf("unable to execute handler: %v", err))
 			if err != nil {
@@ -177,28 +171,21 @@ func buildHandler(query *RouteContainer, middleware []HeaderMiddlewareFn) func(h
 			return
 		}
 
-		fmt.Printf(
-			"%s %s %s\n",
-			padString(fmt.Sprintf("[%s]", perf.routeName), 20),
-			padString(fmt.Sprintf("Middleware: %v", perf.middlewareTiming), 25),
-			fmt.Sprintf("Handler: %v", perf.handlerTiming),
-		)
-
-		w.Write(res)
+		w.Write(res.([]byte))
 	}
 }
 
 // This is not good. It makes assumptions about the library user's file structure. Clean up
-func (c *Crosser) AddAdditionalHandlers() {
+func (c *TinyRPC) AddAdditionalHandlers() {
 	c.router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./manage/static/"))))
 	c.router.PathPrefix("/assets/").Handler(http.StripPrefix("/assets/", http.FileServer(http.Dir("./manage/static/assets/"))))
 }
 
 // Take the handlers and register them on the router
-func (c *Crosser) assembleHandlers() {
+func (c *TinyRPC) assembleHandlers() {
 	longestIndex := 0
 	for idx, query := range c.handlers {
-		f := buildHandler(query, query.HeaderMiddleware)
+		f := buildHandler(query)
 		// We know that input and output types have to follow a particular pattern
 		// so we can assume if something is the longest route, it's also longest
 		// input and output
@@ -223,7 +210,7 @@ func (c *Crosser) assembleHandlers() {
 	}
 }
 
-func (c *Crosser) writeCode() {
+func (c *TinyRPC) writeCode() {
 	if c.tsOutputLocation == "" {
 		// Skip writing code out
 		fmt.Println("Not writing out code as tsOutputLocation is blank")
@@ -258,7 +245,7 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(body)
 }
 
-func (c *Crosser) Start() {
+func (c *TinyRPC) Start() {
 	start := time.Now()
 	c.assembleHandlers()
 	fmt.Printf("\nAssembled handlers in %v\n", time.Since(start))
@@ -280,7 +267,7 @@ func (c *Crosser) Start() {
 	log.Fatal(srv.ListenAndServe())
 }
 
-func (c *Crosser) AddHeaderType(header any) {
+func (c *TinyRPC) AddHeaderType(header any) {
 	if c.headerType != nil {
 		panic("Header type already set")
 	}
@@ -291,7 +278,7 @@ func (c *Crosser) AddHeaderType(header any) {
 
 // I can use handlers to build up a collection of types to generate
 // Can I then also build the actual HTTP handlers
-func (c *Crosser) AddHandler(q *RouteContainer) {
+func (c *TinyRPC) AddHandler(q *RouteContainer) {
 	// Check that there's not already another handler on the same route
 	for _, handler := range c.handlers {
 		if handler.QueryPath == q.QueryPath {
@@ -302,6 +289,14 @@ func (c *Crosser) AddHandler(q *RouteContainer) {
 	c.handlers = append(c.handlers, q)
 }
 
-func (c *Crosser) AddAppConstants(appConstants any) {
+func (c *TinyRPC) GetAllMethodNames() []string {
+	returnSlice := make([]string, len(c.handlers))
+	for idx, handler := range c.handlers {
+		returnSlice[idx] = handler.FnName
+	}
+	return returnSlice
+}
+
+func (c *TinyRPC) AddAppConstants(appConstants any) {
 	c.appConstants = appConstants
 }

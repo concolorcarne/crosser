@@ -59,23 +59,25 @@ func extractRouteIOName[inputType any, outputType any]() (string, error) {
 	return inputName, nil
 }
 
-func (p *Route[input, output]) createRouteRep(headerMiddleware []HeaderMiddlewareFn) (*RouteContainer, error) {
+func (p *Route[input, output]) createRouteRep(interceptors []Interceptor) (*RouteContainer, error) {
 	inputName, err := extractRouteIOName[input, output]()
 
 	if err != nil {
 		return nil, err
 	}
 
-	queryPath := fmt.Sprintf("/crosser/%s", inputName)
-	if headerMiddleware == nil {
-		headerMiddleware = []HeaderMiddlewareFn{}
+	queryPath := fmt.Sprintf("/tinyrpc/%s", inputName)
+	if interceptors == nil {
+		interceptors = []Interceptor{}
 	}
+
+	chainedInterceptors := collapseInterceptors(interceptors, inputName, p.byteHandler)
+
 	return &RouteContainer{
-		InputType:        reflect.TypeFor[input](),
-		OutputType:       reflect.TypeFor[output](),
-		FnName:           inputName,
-		HandleFn:         p.byteHandler,
-		QueryPath:        queryPath,
-		HeaderMiddleware: headerMiddleware,
+		InputType:  reflect.TypeFor[input](),
+		OutputType: reflect.TypeFor[output](),
+		FnName:     inputName,
+		HandleFn:   chainedInterceptors,
+		QueryPath:  queryPath,
 	}, nil
 }

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/concolorcarne/crosser/typescriptify"
+	"github.com/concolorcarne/tinyrpc/typescriptify"
 )
 
 func buildConvertHeaderFunction(headerParamSignature string) typescriptify.TypeScriptFunction {
@@ -91,7 +91,7 @@ func buildGenFunc(headerParamSignature string, host string, shouldConvertHeaders
 	}
 }
 
-func (c *Crosser) genCode() (string, error) {
+func (c *TinyRPC) genCode() (string, error) {
 	converter := typescriptify.New()
 	converter.DontExport = false
 	converter.BackupDir = ""

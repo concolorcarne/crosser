@@ -1,7 +1,7 @@
-# Crosser
+# TinyRPC
 
-## What is Crosser?
-Crosser is a project heavily inspired by [tRPC](https://github.com/trpc/trpc), [BlueRPC](https://github.com/blue-rpc/bluerpc) and the similar functionality in [Wails](https://github.com/wailsapp/wails). It attempts to address the challenge of type safety between a Go web server, and a Typescript frontend.
+## What is TinyRPC?
+TinyRPC is a project heavily inspired by [tRPC](https://github.com/trpc/trpc), [BlueRPC](https://github.com/blue-rpc/bluerpc) and the similar functionality in [Wails](https://github.com/wailsapp/wails). It attempts to address the challenge of type safety between a Go web server, and a Typescript frontend.
 
 ## Aims
 - A great DX for common tasks
@@ -47,7 +47,7 @@ export interface sayHelloResponse {
 }
 
 export async function sayHello(params: sayHelloRequest, headers?: HeadersInit): Promise<Response<sayHelloResponse> | Error> {
-	return genFunc<sayHelloRequest, sayHelloResponse>(params, "/crosser/sayHello", headers);
+	return genFunc<sayHelloRequest, sayHelloResponse>(params, "/tinyrpc/sayHello", headers);
 }
 ```
 

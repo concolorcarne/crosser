@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/concolorcarne/crosser/app"
+	"github.com/concolorcarne/tinyrpc/app"
 )
 
 type getDirContentsRequest struct {
@@ -66,7 +66,7 @@ func GetTokenMiddleware(ctx context.Context, headers http.Header) error {
 
 func main() {
 	a := app.New("localhost:8000", "./output.ts")
-	app.NewRoute(getDirContents).AttachWithMiddleware(a, GetTokenMiddleware)
+	app.NewRoute(getDirContents).AttachWithMiddleware(a)
 	app.NewRoute(sayHelloHandler).Attach(a)
 
 	a.Start()

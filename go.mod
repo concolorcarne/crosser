@@ -1,4 +1,4 @@
-module github.com/concolorcarne/crosser
+module github.com/concolorcarne/tinyrpc
 
 go 1.22.0
 

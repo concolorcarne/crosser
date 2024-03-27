@@ -28,7 +28,7 @@ func TestHandlerSomething(t *testing.T) {
 		newRoute := NewRoute(testFn)
 		rr, err := newRoute.createRouteRep(nil)
 		So(err, ShouldBeNil)
-		handler := buildHandler(rr, nil)
+		handler := buildHandler(rr)
 
 		Convey("with valid input", func() {
 			input := getDirContentsRequest{
@@ -76,16 +76,12 @@ func TestBuildHandler(t *testing.T) {
 	Convey("basic test works", t, func() {
 		// Mock RouteRep and middleware
 		mockRouteRep := &RouteContainer{
-			HandleFn: func(ctx context.Context, bytes []byte) ([]byte, error) {
+			HandleFn: func(ctx context.Context, bytes any) (any, error) {
 				return json.Marshal(Res[ReturnError]{Status: 200, Body: ReturnError{ErrorMessage: "Success"}})
 			},
 		}
 
-		middleware := func(ctx context.Context, headers http.Header) error {
-			return nil // Simulate successful middleware execution
-		}
-
-		handler := buildHandler(mockRouteRep, []HeaderMiddlewareFn{middleware})
+		handler := buildHandler(mockRouteRep)
 
 		// Create a test server using our handler
 		server := httptest.NewServer(http.HandlerFunc(handler))

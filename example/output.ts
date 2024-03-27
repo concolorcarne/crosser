@@ -42,11 +42,11 @@ export interface sayHelloResponse {
 }
 
 export async function getDirContents(params: getDirContentsRequest, headers?: HeadersInit): Promise<Response<getDirContentsResponse> | Error> {
-	return genFunc<getDirContentsRequest, getDirContentsResponse>(params, "/crosser/getDirContents", headers);
+	return genFunc<getDirContentsRequest, getDirContentsResponse>(params, "/tinyrpc/getDirContents", headers);
 }
 
 export async function sayHello(params: sayHelloRequest, headers?: HeadersInit): Promise<Response<sayHelloResponse> | Error> {
-	return genFunc<sayHelloRequest, sayHelloResponse>(params, "/crosser/sayHello", headers);
+	return genFunc<sayHelloRequest, sayHelloResponse>(params, "/tinyrpc/sayHello", headers);
 }
 
 async function genFunc<T, K>(params: T, path: string, headers?: HeadersInit): Promise<Error | Response<K>> {
