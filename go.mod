@@ -3,7 +3,7 @@ module github.com/concolorcarne/tinyrpc
 go 1.22.0
 
 require (
-	github.com/gorilla/mux v1.8.1
+	github.com/go-chi/chi v1.5.5
 	github.com/smartystreets/goconvey v1.8.1
 	github.com/tkrajina/go-reflector v0.5.5
 	gopkg.in/validator.v2 v2.0.1

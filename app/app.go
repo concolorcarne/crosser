@@ -9,25 +9,28 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi"
 	"gopkg.in/validator.v2"
 )
 
 type TinyRPC struct {
 	handlers         []*RouteContainer
 	host             string
-	router           *mux.Router
+	router           *chi.Mux
 	tsOutputLocation string
 	headerType       reflect.Type
 	appConstants     any
 }
 
 func New(host string, tsOutputLocation string) *TinyRPC {
+	router := chi.NewRouter()
+
 	return &TinyRPC{
 		host:             host,
-		router:           mux.NewRouter(),
+		router:           router,
 		tsOutputLocation: tsOutputLocation,
 	}
 }
@@ -173,11 +176,25 @@ func buildHandler(query *RouteContainer) func(http.ResponseWriter, *http.Request
 	}
 }
 
-// This is not good. It makes assumptions about the library user's file structure. Clean up
-func (c *TinyRPC) AddAdditionalHandler(path string, handler http.Handler) {
-	c.router.Handle(path, handler)
-	// c.router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./manage/static/"))))
-	// c.router.PathPrefix("/assets/").Handler(http.StripPrefix("/assets/", http.FileServer(http.Dir("./manage/static/assets/"))))
+func (c *TinyRPC) AddStaticDir(servePath string, dir string) {
+	root := http.Dir(dir)
+
+	if strings.ContainsAny(servePath, "{}*") {
+		panic("FileServer does not permit any URL parameters.")
+	}
+
+	if servePath != "/" && servePath[len(servePath)-1] != '/' {
+		c.router.Get(servePath, http.RedirectHandler(servePath+"/", http.StatusMovedPermanently).ServeHTTP)
+		servePath += "/"
+	}
+	servePath += "*"
+
+	c.router.Get(servePath, func(w http.ResponseWriter, r *http.Request) {
+		rctx := chi.RouteContext(r.Context())
+		pathPrefix := strings.TrimSuffix(rctx.RoutePattern(), "/*")
+		fs := http.StripPrefix(pathPrefix, http.FileServer(root))
+		fs.ServeHTTP(w, r)
+	})
 }
 
 // Take the handlers and register them on the router
@@ -192,10 +209,10 @@ func (c *TinyRPC) assembleHandlers() {
 			longestIndex = idx
 		}
 
-		c.router.HandleFunc(
+		c.router.Post(
 			query.QueryPath,
 			f,
-		).Methods("POST")
+		)
 	}
 
 	// This'll be way more useful if I have the actual TS types at this point
@@ -233,15 +250,6 @@ func (c *TinyRPC) writeCode() {
 	}
 }
 
-func (c *TinyRPC) SeeAllRoutes() {
-	c.router.Walk(func(route *mux.Route, router *mux.Router, ancestors []*mux.Route) error {
-		tpl, err1 := route.GetPathTemplate()
-		met, err2 := route.GetMethods()
-		fmt.Println("======================", tpl, err1, met, err2)
-		return nil
-	})
-}
-
 func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Got not found request", r.URL)
 	body, err := buildError(STATUS_NOT_FOUND, "Not found")
@@ -261,7 +269,7 @@ func (c *TinyRPC) Start() {
 	c.writeCode()
 	fmt.Printf("%s %v\n\n", padString("Wrote code in", 21), time.Since(start))
 
-	c.router.NotFoundHandler = http.HandlerFunc(notFoundHandler)
+	c.router.NotFound(notFoundHandler)
 
 	// todo: Handle SSL
 	addr := c.host
@@ -271,8 +279,6 @@ func (c *TinyRPC) Start() {
 		WriteTimeout: 15 * time.Second,
 		ReadTimeout:  15 * time.Second,
 	}
-
-	c.SeeAllRoutes()
 
 	fmt.Println("Listening on:", addr)
 	log.Fatal(srv.ListenAndServe())
