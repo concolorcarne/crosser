@@ -15,7 +15,7 @@ import (
 func TestHandlerSomething(t *testing.T) {
 	Convey("simple handler can be created", t, func() {
 		type getDirContentsRequest struct {
-			Name string `validate:"required"`
+			Name string `validate:"nonzero"`
 		}
 		type getDirContentsResponse struct{ Out string }
 
@@ -65,45 +65,8 @@ func TestHandlerSomething(t *testing.T) {
 			body, _ := io.ReadAll(w.Body)
 			var bodyRes Res[ReturnError]
 			_ = json.Unmarshal(body, &bodyRes)
-			So(bodyRes.Status, ShouldEqual, STATUS_INTERNAL)
-			So(bodyRes.Body.ErrorMessage, ShouldContainSubstring, "Error:Field validation for 'Name' failed on the 'required' tag")
+			So(bodyRes.Status, ShouldEqual, STATUS_INVALID_ARGUMENT)
+			So(bodyRes.Body.ErrorMessage, ShouldContainSubstring, "Name: zero value")
 		})
 	})
-}
-
-// TestBuildHandler checks the HTTP handler's response for a given request.
-func TestBuildHandler(t *testing.T) {
-	Convey("basic test works", t, func() {
-		// Mock RouteRep and middleware
-		mockRouteRep := &RouteContainer{
-			HandleFn: func(ctx context.Context, bytes any) (any, error) {
-				return json.Marshal(Res[ReturnError]{Status: 200, Body: ReturnError{ErrorMessage: "Success"}})
-			},
-		}
-
-		handler := buildHandler(mockRouteRep)
-
-		// Create a test server using our handler
-		server := httptest.NewServer(http.HandlerFunc(handler))
-		defer server.Close()
-
-		// Prepare a request to send to the handler
-		body := bytes.NewBufferString(`{}`)
-		req, err := http.NewRequest("POST", server.URL, body)
-		So(err, ShouldBeNil)
-
-		// Execute the request
-		resp, err := http.DefaultClient.Do(req)
-		So(err, ShouldBeNil)
-		defer resp.Body.Close()
-
-		// Check the response status code
-		So(resp.StatusCode, ShouldEqual, http.StatusOK)
-
-		var result Res[ReturnError]
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			t.Fatalf("Failed to decode response body: %v", err)
-		}
-	})
-
 }

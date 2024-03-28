@@ -5,7 +5,7 @@ import "context"
 type MiddlewareFn = func(ctx context.Context, req any, method string, handler MiddlewareHandler) (any, error)
 type MiddlewareHandler = func(ctx context.Context, req any) (any, error)
 
-func collapseInterceptors(functions []MiddlewareFn, method string, finalFn MiddlewareHandler) MiddlewareHandler {
+func collapseMiddleware(functions []MiddlewareFn, method string, finalFn MiddlewareHandler) MiddlewareHandler {
 	if len(functions) == 0 {
 		return finalFn
 	} else {

@@ -9,12 +9,12 @@ import (
 )
 
 type getDirContentsRequest struct {
-	Token string `validate:"required"`
+	Token string `validate:"nonzero"`
 	Path  string
 }
 
 type directoryListingItem struct {
-	Name  string `validate:"required"`
+	Name  string `validate:"nonzero"`
 	IsDir bool
 }
 

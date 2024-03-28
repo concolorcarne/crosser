@@ -4,17 +4,11 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-
-	"github.com/go-playground/validator/v10"
 )
 
 // Creates a new query procedure that can be attached to groups / app root.
 // The generic arguments specify the structure for validating query parameters (the query Params and the resulting handler output)
 func NewRoute[input any, output any](queryFn RouteHandler[input, output]) *Route[input, output] {
-	if validate == nil {
-		validate = validator.New(validator.WithRequiredStructEnabled())
-	}
-
 	var inputType input
 	checkIfQueryStruct(inputType)
 
@@ -71,7 +65,7 @@ func (p *Route[input, output]) createRouteRep(interceptors []MiddlewareFn) (*Rou
 		interceptors = []MiddlewareFn{}
 	}
 
-	chainedInterceptors := collapseInterceptors(interceptors, inputName, p.byteHandler)
+	chainedInterceptors := collapseMiddleware(interceptors, inputName, p.byteHandler)
 
 	return &RouteContainer{
 		InputType:  reflect.TypeFor[input](),

@@ -11,8 +11,8 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/go-playground/validator/v10"
 	"github.com/gorilla/mux"
+	"gopkg.in/validator.v2"
 )
 
 type TinyRPC struct {
@@ -52,8 +52,6 @@ type RouteContainer struct {
 	ChainedInterceptor []MiddlewareHandler
 }
 
-var validate *validator.Validate
-
 type Route[input any, output any] struct {
 	// A handler that matches the shape of the generic function
 	// but deals in bytes that are unmarshalled/ marshalled from/ to json
@@ -81,12 +79,12 @@ func queryToByteHandlerAdapter[inputType any, outputType any](queryFunc func(con
 		var body inputType
 		err := json.Unmarshal(input.([]byte), &body)
 		if err != nil {
-			return nil, fmt.Errorf("invalid input schema: %v", err)
+			return buildError(STATUS_INVALID_ARGUMENT, err.Error())
 		}
 
-		err = validate.Struct(body)
+		err = validator.Validate(body)
 		if err != nil {
-			return nil, fmt.Errorf("validation of body failed: %v", err)
+			return buildError(STATUS_INVALID_ARGUMENT, err.Error())
 		}
 
 		res, err := queryFunc(ctx, body)
@@ -176,9 +174,10 @@ func buildHandler(query *RouteContainer) func(http.ResponseWriter, *http.Request
 }
 
 // This is not good. It makes assumptions about the library user's file structure. Clean up
-func (c *TinyRPC) AddAdditionalHandlers() {
-	c.router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./manage/static/"))))
-	c.router.PathPrefix("/assets/").Handler(http.StripPrefix("/assets/", http.FileServer(http.Dir("./manage/static/assets/"))))
+func (c *TinyRPC) AddAdditionalHandler(path string, handler http.Handler) {
+	c.router.Handle(path, handler)
+	// c.router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./manage/static/"))))
+	// c.router.PathPrefix("/assets/").Handler(http.StripPrefix("/assets/", http.FileServer(http.Dir("./manage/static/assets/"))))
 }
 
 // Take the handlers and register them on the router
@@ -234,7 +233,17 @@ func (c *TinyRPC) writeCode() {
 	}
 }
 
+func (c *TinyRPC) SeeAllRoutes() {
+	c.router.Walk(func(route *mux.Route, router *mux.Router, ancestors []*mux.Route) error {
+		tpl, err1 := route.GetPathTemplate()
+		met, err2 := route.GetMethods()
+		fmt.Println("======================", tpl, err1, met, err2)
+		return nil
+	})
+}
+
 func notFoundHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Got not found request", r.URL)
 	body, err := buildError(STATUS_NOT_FOUND, "Not found")
 	if err != nil {
 		w.WriteHeader(500)
@@ -262,6 +271,8 @@ func (c *TinyRPC) Start() {
 		WriteTimeout: 15 * time.Second,
 		ReadTimeout:  15 * time.Second,
 	}
+
+	c.SeeAllRoutes()
 
 	fmt.Println("Listening on:", addr)
 	log.Fatal(srv.ListenAndServe())
